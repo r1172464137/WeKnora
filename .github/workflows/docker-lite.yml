@@ -5,9 +5,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "镜像标签（留空则用 lite + commit sha）"
+        description: "镜像标签（留空则 lite）"
         required: false
         default: "lite"
+      platforms:
+        description: "构建平台，逗号分隔（amd64 约 8 分钟；加 arm64 需 QEMU 模拟，明显更慢）"
+        required: false
+        default: "linux/amd64"
   push:
     tags:
       - "v*"
@@ -42,7 +46,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve image name and tag
+      - name: Resolve image name, tag and platforms
         id: meta
         run: |
           IMAGE=$(echo "${{ env.IMAGE }}" | tr '[:upper:]' '[:lower:]')
@@ -50,16 +54,19 @@ jobs:
           if [ -z "$TAG" ]; then
             if [ "${{ github.ref_type }}" = "tag" ]; then TAG="${{ github.ref_name }}"; else TAG="lite"; fi
           fi
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG"    >> "$GITHUB_OUTPUT"
-          echo "Building $IMAGE:$TAG"
+          PLATFORMS="${{ inputs.platforms }}"
+          if [ -z "$PLATFORMS" ]; then PLATFORMS="linux/amd64"; fi
+          echo "image=$IMAGE"         >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"             >> "$GITHUB_OUTPUT"
+          echo "platforms=$PLATFORMS" >> "$GITHUB_OUTPUT"
+          echo "Building $IMAGE:$TAG for $PLATFORMS"
 
-      - name: Build and push (amd64 + arm64)
+      - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile.lite
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ steps.meta.outputs.platforms }}
           push: true
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
