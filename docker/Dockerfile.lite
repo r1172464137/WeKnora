@@ -1,0 +1,58 @@
+# syntax=docker/dockerfile:1
+# WeKnora Lite 单二进制镜像（内置 SQLite，零外部依赖：无 PostgreSQL / Redis / MQ）
+# 与 .github/workflows/release-lite.yml 的构建方式保持一致：
+#   EDITION=lite + go build -tags "sqlite_fts5" + CGO_ENABLED=1
+
+# ── 1. 前端 ─────────────────────────────────────────────
+FROM node:22-bookworm AS frontend
+WORKDIR /src
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build          # 产物在 /src/dist
+
+# ── 2. Go 二进制（CGO 必须开，sqlite_fts5 依赖）───────────
+FROM golang:1.26-bookworm AS builder
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+COPY --from=frontend /src/dist ./web
+
+ENV CGO_ENABLED=1 \
+    EDITION=lite \
+    CGO_CFLAGS="-Wno-deprecated-declarations"
+
+RUN go build -tags "sqlite_fts5" -ldflags="-w -s" -o /out/WeKnora-lite ./cmd/server
+
+# 组装运行时目录（config / migrations 存在才拷，避免目录缺失导致构建失败）
+RUN mkdir -p /out/pkg \
+ && cp /out/WeKnora-lite /out/pkg/ \
+ && cp -r web /out/pkg/web \
+ && { [ -d config ] && cp -r config /out/pkg/config || true; } \
+ && { [ -d migrations/sqlite ] && mkdir -p /out/pkg/migrations/sqlite && cp -r migrations/sqlite/. /out/pkg/migrations/sqlite/ || true; } \
+ && { [ -f .env.lite.example ] && cp .env.lite.example /out/pkg/ || true; }
+
+# ── 3. 运行时 ───────────────────────────────────────────
+FROM debian:bookworm-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates tzdata \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd -m -u 10001 weknora
+
+WORKDIR /app
+COPY --from=builder --chown=weknora:weknora /out/pkg /app
+RUN mkdir -p /app/data && chown -R weknora:weknora /app
+
+USER weknora
+ENV TZ=Asia/Shanghai \
+    PORT=8080
+
+# Lite 默认读程序目录下的 .env.lite；挂载 /app/data 持久化 SQLite
+VOLUME ["/app/data"]
+EXPOSE 8080
+
+ENTRYPOINT ["/app/WeKnora-lite"]
