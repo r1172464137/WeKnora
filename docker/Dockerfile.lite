@@ -14,7 +14,7 @@ RUN npm run build          # 产物在 /src/dist
 # ── 2. Go 二进制（CGO 必须开，sqlite_fts5 依赖）───────────
 FROM golang:1.26-bookworm AS builder
 RUN apt-get update \
- && apt-get install -y --no-install-recommends build-essential ca-certificates \
+ && apt-get install -y --no-install-recommends build-essential ca-certificates libsqlite3-dev pkg-config \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -42,7 +42,7 @@ RUN mkdir -p /out/pkg \
 # ── 3. 运行时 ───────────────────────────────────────────
 FROM debian:bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates tzdata \
+ && apt-get install -y --no-install-recommends ca-certificates tzdata libsqlite3-0 \
  && rm -rf /var/lib/apt/lists/* \
  && useradd -m -u 10001 weknora
 
