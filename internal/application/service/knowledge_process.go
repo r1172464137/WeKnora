@@ -92,6 +92,14 @@ func (s *knowledgeService) cloneKnowledge(
 		return err
 	}
 
+	var folderSnapshot *types.KnowledgeFolderPathSnapshot
+	if dst.FolderPath != "" {
+		folderSnapshot, err = s.repo.SnapshotKnowledgeFolderPath(ctx, dst.TenantID, dst.KnowledgeBaseID, dst.FolderPath)
+		if err != nil {
+			return knowledgeFolderError(err)
+		}
+	}
+
 	// Deep-copy the source document file into an object owned by the destination
 	// knowledge. Without this the clone only shares the source's storage path, so
 	// deleting the source knowledge would destroy the clone's file too. The new
@@ -114,16 +122,20 @@ func (s *knowledgeService) cloneKnowledge(
 		copiedFilePaths = append(copiedFilePaths, newPath)
 	}
 
+	insertAttempted, insertKnownRejected := false, false
 	defer func() {
 		if err == nil {
 			return
 		}
 		stored, loadErr := s.repo.GetKnowledgeByID(ctx, dst.TenantID, dst.ID)
 		if errors.Is(loadErr, repository.ErrKnowledgeNotFound) {
-			cleanupCopiedObjects(
-				ctx, s.resolveFileService(ctx, targetKB),
-				knowledgeResourceOwners(s.resourceCatalog, dst.ID), copiedFilePaths,
-			)
+			// A not-found read cannot resolve an ambiguous INSERT/COMMIT result.
+			if !insertAttempted || insertKnownRejected {
+				cleanupCopiedObjects(
+					ctx, s.resolveFileService(ctx, targetKB),
+					knowledgeResourceOwners(s.resourceCatalog, dst.ID), copiedFilePaths,
+				)
+			}
 			return
 		}
 		// An uncertain save/read must not delete objects that may be referenced.
@@ -140,8 +152,18 @@ func (s *knowledgeService) cloneKnowledge(
 		after.ErrorMessage = err.Error()
 		_ = s.repo.UpdateKnowledgeForTransfer(ctx, &before, &after)
 	}()
-	if err = s.repo.CreateKnowledge(ctx, dst); err != nil {
-		return err
+	insertAttempted = true
+	if folderSnapshot != nil {
+		err = s.repo.CreateKnowledgeWithFolderSnapshot(ctx, dst, folderSnapshot)
+	} else {
+		err = s.repo.CreateKnowledge(ctx, dst)
+	}
+	if err != nil {
+		// Capture the repository outcome before mapping it to an AppError;
+		// the deferred cleanup must not infer certainty from the mapped error.
+		insertKnownRejected = errors.Is(err, repository.ErrKnowledgeFolderChanged) ||
+			errors.Is(err, repository.ErrKnowledgeFolderInvalidPath)
+		return knowledgeFolderError(err)
 	}
 	// Create timestamps can be rounded by the database before the first CAS.
 	persisted, err := s.repo.GetKnowledgeByID(ctx, dst.TenantID, dst.ID)
@@ -3129,15 +3151,24 @@ func (s *knowledgeService) ReparseKnowledge(
 	return s.reparseKnowledge(ctx, knowledgeID, processOverrides, false)
 }
 
-// reparseKnowledge implements ReparseKnowledge. tasksDequeued tells it the
-// caller already dropped the knowledge's queued tasks (ReplaceKnowledgeFile
-// does, before pointing the row at the new file), which saves a second scan
-// of every queue.
+// reparseKnowledge implements public reparse. tasksDequeued is retained for
+// caller compatibility; replacement uses reparseKnowledgeSource with its own
+// source token, and only cancels queued work after acquiring the cleanup claim.
 func (s *knowledgeService) reparseKnowledge(
 	ctx context.Context,
 	knowledgeID string,
 	processOverrides *types.KnowledgeProcessOverrides,
 	tasksDequeued bool,
+) (*types.Knowledge, error) {
+	return s.reparseKnowledgeSource(ctx, knowledgeID, processOverrides, tasksDequeued, nil)
+}
+
+func (s *knowledgeService) reparseKnowledgeSource(
+	ctx context.Context,
+	knowledgeID string,
+	processOverrides *types.KnowledgeProcessOverrides,
+	tasksDequeued bool,
+	expectedSource *types.Knowledge,
 ) (*types.Knowledge, error) {
 	logger.Info(ctx, "Start re-parsing knowledge")
 
@@ -3147,6 +3178,12 @@ func (s *knowledgeService) reparseKnowledge(
 		return nil, err
 	}
 
+	if expectedSource != nil && (existing.ID != expectedSource.ID || existing.TenantID != expectedSource.TenantID ||
+		existing.KnowledgeBaseID != expectedSource.KnowledgeBaseID ||
+		existing.FilePath != expectedSource.FilePath ||
+		existing.FileHash != expectedSource.FileHash) {
+		return nil, werrors.NewConflictError("文件版本或所属知识库已改变，请刷新后重试")
+	}
 	tenantID := existing.TenantID
 
 	// When the caller supplies new overrides (e.g. via the reparse confirm
@@ -3159,10 +3196,6 @@ func (s *knowledgeService) reparseKnowledge(
 		}
 		if err := existing.SetProcessOverrides(processOverrides); err != nil {
 			logger.Errorf(ctx, "Failed to set process overrides on reparse: %v", err)
-			return nil, err
-		}
-		if err := s.repo.UpdateKnowledgeColumn(ctx, existing.ID, "metadata", existing.Metadata); err != nil {
-			logger.Errorf(ctx, "Failed to persist process overrides on reparse: %v", err)
 			return nil, err
 		}
 	}
@@ -3186,35 +3219,41 @@ func (s *knowledgeService) reparseKnowledge(
 			logger.Warnf(ctx, "Reparse rejected, parser engine unavailable for knowledge %s: %v", knowledgeID, err)
 			return nil, err
 		}
-		if tasksDequeued {
-			// ReplaceKnowledgeFile already pointed the row at a new file and is
-			// about to delete the old one: drop the retired file's chunks,
-			// index, images and graph synchronously so search never serves the
-			// replaced file's content under the new filename.
-			logger.Infof(ctx, "Cleaning up replaced file resources for knowledge: %s", knowledgeID)
-			if err := s.cleanupKnowledgeResources(ctx, existing); err != nil {
-				logger.ErrorWithFields(ctx, err, map[string]interface{}{
-					"knowledge_id": knowledgeID,
-				})
-				return nil, err
-			}
-		}
 	}
 
-	// For an in-place reparse (!tasksDequeued), nothing is deleted here: the
-	// previous content stays searchable until processChunks swaps it out once
-	// the replacement has been parsed (#5002).
+	// A replace points the row at a new file; a plain reparse re-reads the same one.
+	replacing := tasksDequeued || expectedSource != nil
 
-	// Everything that can reject the reparse has run. From here on the
-	// previous run is superseded, so stop it before announcing the new one.
-	//
-	// A reparse may land while the previous run is still in flight (batch
-	// reparse and the API do not gate on status). Its queued tasks would
-	// otherwise run against the new attempt: an old ProcessDocument wipes the
-	// new chunks and writes "processing" back, an old post-process seeds the
-	// counter for subtasks that all drop themselves as superseded.
-	if !tasksDequeued && isInFlightParseStatus(existing.ParseStatus) {
+	// Admission is an atomic source/status checkpoint before any cleanup or
+	// queue cancellation. A transfer that won first makes this CAS fail;
+	// after this claim, transfer admission sees processing and must wait.
+	claimed, err := s.repo.ClaimKnowledgeForReparse(ctx, existing, expectedSource != nil)
+	if err != nil {
+		return nil, knowledgeFolderError(err)
+	}
+	existing = claimed
+	if !tasksDequeued && expectedSource != nil {
 		s.dequeueKnowledgeTasks(ctx, existing.ID)
+	}
+	// For an in-place reparse nothing is deleted here: the previous content
+	// stays searchable until processChunks swaps it out once the replacement
+	// has been parsed (#5002). A replace drops the retired file's resources now.
+	if replacing && !existing.IsManual() {
+		logger.Infof(ctx, "Cleaning up replaced file resources for knowledge: %s", knowledgeID)
+		if err := s.cleanupKnowledgeResources(ctx, existing); err != nil {
+			logger.ErrorWithFields(ctx, err, map[string]interface{}{"knowledge_id": knowledgeID})
+			failed, markErr := s.repo.FailKnowledgeReparseClaim(
+				context.WithoutCancel(ctx),
+				existing,
+				"Reparse cleanup failed: "+err.Error(),
+			)
+			if markErr != nil {
+				logger.Errorf(ctx, "Failed to mark cleanup claim failed for %s: %v", existing.ID, markErr)
+			} else {
+				existing = failed
+			}
+			return existing, err
+		}
 	}
 
 	// Allocate the new span tree attempt only now. Opening it earlier and
@@ -3252,11 +3291,11 @@ func (s *knowledgeService) reparseKnowledge(
 
 		if err := s.repo.UpdateKnowledge(ctx, existing); err != nil {
 			logger.Errorf(ctx, "Failed to update knowledge status before reparse: %v", err)
-			return nil, err
+			return existing, err
 		}
 		if err := s.repo.UpdateKnowledgeColumn(ctx, existing.ID, "pending_subtasks_count", 0); err != nil {
 			logger.Errorf(ctx, "Failed to reset pending_subtasks_count before reparse: %v", err)
-			return nil, err
+			return existing, err
 		}
 
 		if _, err := s.enqueueManualProcessing(ctx, existing, manualContent, true); err != nil {
@@ -3274,7 +3313,7 @@ func (s *knowledgeService) reparseKnowledge(
 	// ProcessedAt describing the live indexed content during an in-place
 	// reparse (#5002); otherwise Graph Search, Agent QA document listings and
 	// vector-store cleanup lose sight of it before processChunks swaps it out.
-	if !tasksDequeued && hasPreviousIndexedContent(existing) {
+	if !replacing && hasPreviousIndexedContent(existing) {
 		existing.ParseStatus = types.ParseStatusPending
 		existing.ErrorMessage = ""
 		existing.PendingSubtasksCount = 0
@@ -3284,11 +3323,11 @@ func (s *knowledgeService) reparseKnowledge(
 
 	if err := s.repo.UpdateKnowledge(ctx, existing); err != nil {
 		logger.Errorf(ctx, "Failed to update knowledge status before reparse: %v", err)
-		return nil, err
+		return existing, err
 	}
 	if err := s.repo.UpdateKnowledgeColumn(ctx, existing.ID, "pending_subtasks_count", 0); err != nil {
 		logger.Errorf(ctx, "Failed to reset pending_subtasks_count before reparse: %v", err)
-		return nil, err
+		return existing, err
 	}
 
 	// Step 3: Trigger async re-parsing based on knowledge type

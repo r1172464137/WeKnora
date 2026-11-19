@@ -1393,6 +1393,8 @@ export default {
         knowledge: {
           list: 'List knowledge',
           list_folders: 'List knowledge folders',
+          create_folder: "Create empty knowledge folder",
+          delete_folder: "Delete empty knowledge folder",
           rename_folder: 'Rename or move folder',
           create_manual: 'Create knowledge manually',
           create_from_url: 'Create knowledge from URL',

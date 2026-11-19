@@ -1391,6 +1391,8 @@ export default {
         knowledge: {
           list: '获取知识列表',
           list_folders: '获取知识文件夹列表',
+          create_folder: "创建空知识文件夹",
+          delete_folder: "删除空知识文件夹",
           rename_folder: '重命名或移动文件夹',
           create_manual: '手动创建知识',
           create_from_url: '从链接创建知识',

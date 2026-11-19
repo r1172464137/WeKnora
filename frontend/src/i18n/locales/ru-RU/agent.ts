@@ -1391,6 +1391,8 @@ export default {
         knowledge: {
           list: 'Получить список знаний',
           list_folders: 'Получить список папок знаний',
+          create_folder: "Создать пустую папку знаний",
+          delete_folder: "Удалить пустую папку знаний",
           rename_folder: 'Переименовать или переместить папку',
           create_manual: 'Создать знание вручную',
           create_from_url: 'Создать знание по ссылке',

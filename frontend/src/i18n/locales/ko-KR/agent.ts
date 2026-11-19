@@ -1391,6 +1391,8 @@ export default {
         knowledge: {
           list: '지식 목록 조회',
           list_folders: '지식 폴더 목록 조회',
+          create_folder: "빈 지식 폴더 만들기",
+          delete_folder: "빈 지식 폴더 삭제",
           rename_folder: '폴더 이름 변경 또는 이동',
           create_manual: '지식 수동 생성',
           create_from_url: 'URL에서 지식 생성',

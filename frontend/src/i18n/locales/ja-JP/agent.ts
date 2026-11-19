@@ -1393,6 +1393,8 @@ export default {
         knowledge: {
           list: 'ナレッジ一覧を取得',
           list_folders: 'ナレッジフォルダー一覧を取得',
+          create_folder: "空のナレッジフォルダーを作成",
+          delete_folder: "空のナレッジフォルダーを削除",
           rename_folder: 'フォルダーの名前変更または移動',
           create_manual: 'ナレッジを手動作成',
           create_from_url: 'URL からナレッジを作成',
