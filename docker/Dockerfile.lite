@@ -29,12 +29,14 @@ ENV CGO_ENABLED=1 \
     EDITION=lite \
     CGO_CFLAGS="-Wno-deprecated-declarations"
 
-RUN go build -tags "sqlite_fts5" -ldflags="-w -s" -o /out/WeKnora-lite ./cmd/server
+# get_version.sh 会注入 handler.Edition=$EDITION；缺了它前端不会被托管、Lite 专属逻辑也不生效
+RUN go build -tags "sqlite_fts5" -ldflags="-w -s $(bash ./scripts/get_version.sh ldflags)" -o /out/WeKnora-lite ./cmd/server
 
 # 组装运行时目录（config / migrations 存在才拷，避免目录缺失导致构建失败）
 RUN mkdir -p /out/pkg \
  && cp /out/WeKnora-lite /out/pkg/ \
  && cp -r web /out/pkg/web \
+ && cp -r "$(go list -m -f '{{.Dir}}' github.com/yanyiwu/gojieba)/deps/cppjieba/dict" /out/pkg/dict \
  && { [ -d config ] && cp -r config /out/pkg/config || true; } \
  && { [ -d migrations/sqlite ] && mkdir -p /out/pkg/migrations/sqlite && cp -r migrations/sqlite/. /out/pkg/migrations/sqlite/ || true; } \
  && { [ -f .env.lite.example ] && cp .env.lite.example /out/pkg/ || true; }
@@ -52,7 +54,8 @@ RUN mkdir -p /app/data && chown -R weknora:weknora /app
 
 USER weknora
 ENV TZ=Asia/Shanghai \
-    PORT=8080
+    PORT=8080 \
+    JIEBA_DICT_DIR=/app/dict
 
 # Lite 默认读程序目录下的 .env.lite；挂载 /app/data 持久化 SQLite
 VOLUME ["/app/data"]
