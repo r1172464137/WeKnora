@@ -1,0 +1,77 @@
+# Dockerfile.lite 专用 .dockerignore
+# 注意：Docker 里 <Dockerfile>.dockerignore 会「覆盖」根 .dockerignore，
+# 所以这里必须把根规则抄全，但要去掉 `frontend/` 排除项——
+# Lite 镜像需要在前端阶段从源码构建，根 .dockerignore 是给标准版用的（不引用 frontend/）。
+
+# VCS / CI（.github 只排除，但 workflow 文件已在仓库里，构建不需要）
+.git/
+.github/
+.gitignore
+.gitattributes
+
+# 编辑器 / IDE
+.cursor/
+.claude/
+.codebuddy/
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Python 虚拟环境 / 缓存
+**/.venv/
+.venv_proto/
+**/.python-version
+**/__pycache__/
+**/*.pyc
+
+# Node：只排除依赖和产物，源码必须保留
+**/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+WeKnora-Chrome-Extension/
+
+# 日志 / 临时
+logs/
+tmp/
+temp/
+*.log
+*.pid
+
+# 本地构建产物 / 二进制
+WeKnora
+WeKnora-lite
+/server
+/dist/
+/build/
+/artifacts/browserskill/
+cmd/desktop/build/bin/
+
+# 本地数据 / 模型
+/models/
+data/files/
+data/*.db
+data/*.db-wal
+data/*.db-shm
+test/data/mswag.txt
+
+# 敏感文件
+.env
+.env.lite
+*.pem
+*.key
+*.crt
+*_key
+*_secret
+
+# 大的归档（保留 linux 版 protoc，Go 构建可能用到）
+packages/protoc-*.zip
+!packages/protoc-*-linux-x86_64.zip
+!packages/protoc-*-linux-aarch_64.zip
+!packages/protoc-*-linux-arm.zip
+
+# 本地测试脚本
+configure-ollama.sh
+fix-docker.sh
+/scripts/scale_dev_jobs.sh
