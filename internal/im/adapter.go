@@ -180,3 +180,16 @@ type FileDownloader interface {
 	// Returns the file content reader, the resolved file name, and any error.
 	DownloadFile(ctx context.Context, msg *IncomingMessage) (io.ReadCloser, string, error)
 }
+
+// ImageLoader reads the bytes behind an internal storage reference
+// (resource://…, storage://…) with the reply's access checks applied.
+type ImageLoader func(ctx context.Context, ref string) ([]byte, error)
+
+// ImageInliner is an optional interface for adapters that can host images on
+// the IM platform itself (e.g. DingTalk media upload) instead of linking back
+// to WeKnora, which needs no public APP_EXTERNAL_URL. InlineImages receives
+// the final reply and must return it unchanged when inlining is disabled for
+// the channel.
+type ImageInliner interface {
+	InlineImages(ctx context.Context, content string, load ImageLoader) string
+}

@@ -41,6 +41,7 @@ func NewFactory() im.AdapterFactory {
 			})
 
 			adapter := NewAdapter(clientID, clientSecret, cardTemplateID)
+			adapter.SetImageMode(im.GetString(creds, "image_mode"))
 			return adapter, wsCancel, nil
 
 		default:

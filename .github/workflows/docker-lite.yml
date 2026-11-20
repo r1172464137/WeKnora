@@ -28,7 +28,18 @@ env:
   IMAGE: ghcr.io/${{ github.repository }}/weknora-lite
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # IM adapters this fork patches; keeps a broken adapter out of the image.
+      - run: go test ./internal/im/dingtalk/
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

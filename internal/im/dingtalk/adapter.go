@@ -42,6 +42,7 @@ var (
 	_ im.Adapter        = (*Adapter)(nil)
 	_ im.StreamSender   = (*Adapter)(nil)
 	_ im.FileDownloader = (*Adapter)(nil)
+	_ im.ImageInliner   = (*Adapter)(nil)
 )
 
 // Adapter implements im.Adapter for DingTalk.
@@ -49,6 +50,10 @@ type Adapter struct {
 	clientID       string
 	clientSecret   string
 	cardTemplateID string // optional: enables AI card streaming when set
+	imageMode      string // "embed" uploads reply images to DingTalk; otherwise links are sent as-is
+
+	mediaMu    sync.Mutex
+	mediaCache map[string]mediaEntry // storage ref -> uploaded media_id
 
 	// accessToken cache
 	tokenMu    sync.RWMutex

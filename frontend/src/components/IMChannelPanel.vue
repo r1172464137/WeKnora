@@ -414,6 +414,22 @@
                   placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.schema" />
                 <p class="form-desc">{{ $t('agentEditor.im.dingtalkCardTemplateIdHint') }}</p>
               </div>
+              <div class="form-item">
+                <label class="form-label">{{ $t('agentEditor.im.dingtalkImageMode') }}</label>
+                <div class="option-chips">
+                  <button type="button" class="option-chip"
+                    :class="{ 'option-chip--active': formData.credentials.image_mode !== 'embed' }"
+                    @click="formData.credentials.image_mode = 'link'">
+                    {{ $t('agentEditor.im.dingtalkImageModeLink') }}
+                  </button>
+                  <button type="button" class="option-chip"
+                    :class="{ 'option-chip--active': formData.credentials.image_mode === 'embed' }"
+                    @click="formData.credentials.image_mode = 'embed'">
+                    {{ $t('agentEditor.im.dingtalkImageModeEmbed') }}
+                  </button>
+                </div>
+                <p class="form-desc">{{ $t('agentEditor.im.dingtalkImageModeHint') }}</p>
+              </div>
             </template>
 
             <!-- QQBot credentials -->

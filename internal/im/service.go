@@ -193,6 +193,42 @@ func cleanIMContent(ctx context.Context, content string, resolver *storageurl.Fi
 	return content
 }
 
+// maxInlineImageBytes caps one image read for platform upload (DingTalk's
+// image media limit is 20MB).
+const maxInlineImageBytes = 20 << 20
+
+// inlineOutboundImages lets adapters that host images themselves replace the
+// internal storage references left in a final reply. The loader reuses the
+// reply's resolver, so the same per-agent/KB authorization applies.
+func inlineOutboundImages(
+	ctx context.Context, adapter Adapter, content string, resolver *storageurl.FileServiceResolver,
+) string {
+	inliner, ok := adapter.(ImageInliner)
+	if !ok || resolver == nil || content == "" {
+		return content
+	}
+	resolver.WithContext(ctx)
+	return inliner.InlineImages(ctx, content, func(ctx context.Context, ref string) ([]byte, error) {
+		fileSvc := resolver.ResolveFileService(ref)
+		if fileSvc == nil {
+			return nil, fmt.Errorf("no file service for %s", ref)
+		}
+		rc, err := fileSvc.GetFile(ctx, ref)
+		if err != nil {
+			return nil, err
+		}
+		defer rc.Close()
+		data, err := io.ReadAll(io.LimitReader(rc, maxInlineImageBytes+1))
+		if err != nil {
+			return nil, err
+		}
+		if len(data) > maxInlineImageBytes {
+			return nil, fmt.Errorf("image %s exceeds %d bytes", ref, maxInlineImageBytes)
+		}
+		return data, nil
+	})
+}
+
 // newIMFileServiceResolver builds a per-message storage backend resolver. The
 // cache lives for one cleanIMContent / outbound message so a long answer does
 // not re-create an SDK client for every reference.
@@ -2025,9 +2061,10 @@ func (s *Service) executeQARequest(req *qaRequest) {
 	}
 
 	outCtx := imOutboundContext(ctx)
+	resolver := s.newOutboundFileServiceResolver(req.tenant, req.agent, kbIDs)
 	reply := &ReplyMessage{
-		Content: formatIMOutboundAnswerOrFallback(outCtx, answer,
-			s.newOutboundFileServiceResolver(req.tenant, req.agent, kbIDs)),
+		Content: inlineOutboundImages(outCtx, req.adapter,
+			formatIMOutboundAnswerOrFallback(outCtx, answer, resolver), resolver),
 		IsFinal: true,
 	}
 	if err := req.adapter.SendReply(outCtx, req.msg, reply); err != nil {
@@ -2075,8 +2112,9 @@ func (s *Service) handleMessageFullOutput(
 	// QA (and /stop) may have cancelled ctx. Platform updates must still run so
 	// the thinking card is replaced instead of hanging forever.
 	outCtx := imOutboundContext(ctx)
-	finalContent := formatIMOutboundAnswerOrFallback(outCtx, answer,
-		s.newOutboundFileServiceResolver(tenant, customAgent, kbIDs))
+	resolver := s.newOutboundFileServiceResolver(tenant, customAgent, kbIDs)
+	finalContent := inlineOutboundImages(outCtx, adapter,
+		formatIMOutboundAnswerOrFallback(outCtx, answer, resolver), resolver)
 
 	finalizeErr := streamer.FinalizeStream(outCtx, msg, streamID, finalContent)
 	if finalizeErr != nil {
@@ -2928,6 +2966,7 @@ loop:
 		finalDisplay = appendIMAuthNotice(finalDisplay, notice)
 		answer = appendIMAuthNotice(answer, notice)
 	}
+	finalDisplay = inlineOutboundImages(outCtx, adapter, finalDisplay, fileResolver)
 
 	finalizeErr := streamer.FinalizeStream(outCtx, msg, streamID, finalDisplay)
 	if finalizeErr != nil {
@@ -2976,9 +3015,10 @@ func (s *Service) fallbackNonStream(ctx context.Context, msg *IncomingMessage, s
 	}
 
 	outCtx := imOutboundContext(ctx)
+	resolver := s.newOutboundFileServiceResolver(tenant, customAgent, kbIDs)
 	return adapter.SendReply(outCtx, msg, &ReplyMessage{
-		Content: formatIMOutboundAnswerOrFallback(outCtx, answer,
-			s.newOutboundFileServiceResolver(tenant, customAgent, kbIDs)),
+		Content: inlineOutboundImages(outCtx, adapter,
+			formatIMOutboundAnswerOrFallback(outCtx, answer, resolver), resolver),
 		IsFinal: true,
 	})
 }
